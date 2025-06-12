@@ -1,0 +1,24 @@
+{
+  "name": "netsuite_api",
+  "version": "1.0.0",
+  "description": "Netsuite API integration for Elit Tile",
+  "keywords": [
+    "netsuite",
+    "API"
+  ],
+  "homepage": "https://github.com/r3turn0/netsuite_api#readme",
+  "bugs": {
+    "url": "https://github.com/r3turn0/netsuite_api/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/r3turn0/netsuite_api.git"
+  },
+  "license": "ISC",
+  "author": "John Christian Cheng Ericta",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}
