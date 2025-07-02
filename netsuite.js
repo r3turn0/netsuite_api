@@ -1,8 +1,8 @@
-import { NetsuiteApiClient } from 'netsuite-api-client';
+const netsuiteApiClient = require('netsuite-api-client');
 
 class NetsuiteApi {
     constructor(credentials) {
-        this.client = new NetsuiteApiClient({
+        this.client = new netsuiteApiClient({
             consumer_key: credentials.consumer_key,
             consumer_secret_key: credentials.consumer_secret_key,
             token: credentials.token,
@@ -19,9 +19,7 @@ class NetsuiteApi {
                     resolve(response.data);
                 } catch (err) {
                     reject(err);
-                } finally {
-                    this.client.close();
-                }
+                } 
             })(p);
         });
     }
@@ -34,9 +32,6 @@ class NetsuiteApi {
                 }
                 catch(err) {
                     reject(err);
-                }
-                finally {
-                    this.client.close();
                 }
             })(s,l,o);
         });
@@ -57,9 +52,6 @@ class NetsuiteApi {
                 }
                 catch(err) {
                     reject(err);
-                }
-                finally {
-                    this.client.close();
                 }
             })(q, l);
         });
