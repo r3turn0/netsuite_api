@@ -6,7 +6,7 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import csv from 'fast-csv';
 dotenv.config();
-const inputFolder = process.argv[2] || 'csv/input/';
+const inputFolder = process.argv[2] || './csv/input/';
 
 // For PG
 const config = {
@@ -44,9 +44,10 @@ const nClient = new NetsuiteApiClient(nConfig);
 async function tableInfoQuery(table) {
     try {
         await client.connect();
-        const infoQuery = `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '${table}';`;
+        // SELECT column_name, data_type FROM information_schema.columns WHERE table_schema= 'integration' AND table_name = 'product_ext';
+        const infoQuery = `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = '${process.env.SCHEMA}' AND table_name = '${table}';`;
         const res = await client.query(infoQuery);
-        new Promise((resolve, reject) => {
+        return new Promise((resolve, reject) => {
             if(res) {
                 resolve(res);
             }
@@ -67,7 +68,7 @@ async function queryTable(sql) {
     try {
         await client.connect();
         const res = await client.query(sql);
-        new Promise((resolve, reject) => {
+        return new Promise((resolve, reject) => {
             if(res) {
                 resolve(res);
             }
@@ -154,17 +155,17 @@ async function getRecords(p, q, l, o) {
 }
 
 // This function posts a record to Netsuite
-async function postRecord(p, b, r) {
+async function postRecord(p, b, r, m) {
     try {
         const response = await nClient.request({
             path: p,
             body: JSON.stringify(b),
-            method: 'POST',
+            method: m || 'POST',
             restletUrl: r || null
         });
         console.log('Response from postRecord:', response);
         return new Promise((resolve, reject) => {
-            if(response.statusCode === 204) {
+            if(response.statusCode === 204 || response.statusCode === 200 || response.data && response.data.success === true) {
                 resolve(response);
             }
             else {
@@ -178,15 +179,57 @@ async function postRecord(p, b, r) {
     }
 }
 
+// This function gets vendors with optional limit and offset
+async function getInventoryItem(limit,offset) {
+    try {
+        const inventoryItem = await getRecords(
+            'inventoryItem', // Path
+            null, // Query
+            limit ? limit : null,
+            offset ? offset : null
+        );
+        console.log('inventoryItem:', inventoryItem);
+        return new Promise((resolve, reject) => {
+            if(inventoryItem.length > 0) {
+                resolve(inventoryItem);
+            }
+            else {
+                reject(new Error('No vendors found'));
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching vendors:', error);
+        throw error;
+    }
+}
+
+// This function gets all inventory items in batches of 1000
+async function getInventoryItems(numRecords, offset) {
+    let inventory = [];
+    while (numRecords > 0) {
+        const batchSize = Math.min(1000, numRecords);
+        try {
+            const items = await getInventoryItem(batchSize, offset);
+            console.log('Inventory Items:', items);
+            inventory.push(items);
+        } catch (error) {
+            console.error('Error in getInventoryItem:', error);
+        }
+        numRecords -= batchSize;
+        offset = 0; // Reset offset after the first batch
+    }
+    return inventory.flat();
+}
+
 // This function gets UOMs with optional limit and offset
-async function getUOM() {
+async function getUOM(limit,offset) {
     let uoms = [];
     try {
         const items = await getRecords(
             'inventoryItem', // Path
             null, // Query
-            10,
-            10
+            limit ? limit : null,
+            offset ? offset : null
         );
         console.log('Fetch Records Result:');
         for (const item of items) {
@@ -246,13 +289,13 @@ async function getUOM() {
 }
 
 // This function gets vendors with optional limit and offset
-async function getVendor() {
+async function getVendor(limit, offset) {
     try {
         const vendors = await getRecords(
             'vendor', // Path
             null, // Query
-            10,
-            10
+            limit ? limit : null,
+            offset ? offset : null
         );
         console.log('Vendors:', vendors);
         return new Promise((resolve, reject) => {
@@ -304,12 +347,12 @@ async function postInventoryItem(p, b, r) {
     const restletUrl = r || null;
     const path = p || 'inventoryItem';
     const body = b || {
-        "itemId": "ACS-TESTITEM2",
+        "itemId": "ACS-TESTITEM6",
         "taxSchedule": "1",
-        "itemType":"inventoryitem",
+        "itemType":"inventoryitem"
     }
     try {
-        const response = await postRecord(path, body, restletUrl);
+        const response = await postRecord(path, body, restletUrl, 'PUT');
         console.log('Response from postInventoryItem:', response);
         return response;
     }
@@ -319,7 +362,7 @@ async function postInventoryItem(p, b, r) {
     }
 }
 
-// Post a UOM, requires that an inventoryItem be created first to link to the UOM
+// Post a UOM, requires that an inventoryItem or externalId to be created first to link to the UOM
 async function postUOM(p, b) {
     const path = p || 'unitsType';
     const body = b || {
@@ -353,41 +396,338 @@ async function postUOM(p, b) {
 }
 
 // Function to read a CSV file and return an array of objects
-async function readCsvToObjects(filePath) {
-    return new Promise((resolve, reject) => {
-        const results = [];
-        fs.createReadStream(filePath)
-            .pipe(csv.parse({ headers: true }))
-            .on('error', error => reject(error))
-            .on('data', row => results.push(row))
-            .on('end', () => resolve(results));
-    });
+async function readCsvToObjects(folderPath) {
+    const files = fs.readdirSync(folderPath).filter(file => file.endsWith('.csv'));
+    let allResults = [];
+    for (const file of files) {
+        const filePath = `${folderPath}/${file}`;
+        const results = await new Promise((resolve, reject) => {
+            const rows = [];
+            fs.createReadStream(filePath)
+                .pipe(csv.parse({ headers: true }))
+                .on('error', error => reject(error))
+                .on('data', row => rows.push(row))
+                .on('end', () => resolve(rows));
+        });
+        allResults = allResults.concat(results);
+    }
+    return allResults;
 }
 
 // The following functions read from CSV files and post the data to Netsuite
 
 // This function reads vendors from a CSV file and posts them to Netsuite
-async function addVendor() {
+async function addVendor(file) {
     try {
-        const vendors = await readCsvToObjects(inputFolder);
-        console.log('Vendors from CSV:', vendors); 
-        for (const vendor of vendors) {
-            const response = await postVendor('vendor', vendor);
-            console.log('Vendor posted successfully:', response);
+        if(file) {
+            const vendors = await readCsvToObjects(inputFolder);
+            console.log('Vendors from CSV:', vendors); 
+            for (const vendor of vendors) {
+                const v = {
+                    "customForm": {
+                        "id": "-10020",
+                        "refName": "Standard Vendor Form_2",
+                    },
+                    entityId: vendor.ID,
+                    companyName: vendor.Name ? vendor.Name : vendor.ID,
+                    email: vendor.Email,
+                    phone: vendor.Phone,
+                    altPhone: vendor['Office Phone'],
+                    fax: vendor.Fax,
+                    altEmail: vendor['Alt Email'],
+                    url: vendor['Web Address'],
+                    defaultAddress : vendor['Billing Address'],
+                    //defaultShippingAddress: vendor['Shipping Address'],
+                    isInactive: vendor.Inactive ? 'Yes' ? true : false : false,
+                    subsidiary: `${vendor.subsidiary_id}`
+                }
+                    const response = await postVendor('vendor', v);
+                    console.log('Vendor posted successfully:', response);
+                }
+            }
+            else {
+                const data = await queryTable('SELECT * FROM integration.vendor_ext');
+                console.log('Data from vendor_ext:', data);
+                if (data && data.rows && data.rows.length > 0) {
+                    // Map vendor_ext headers to Netsuite keys
+                    const netsuiteKeyMap = {
+                        "customForm": {
+                            "id": "-10020",
+                            "refName": "Standard Vendor Form_2",
+                        },
+                        entityId: 'entityId',
+                        companyName: 'companyName',
+                        email: 'email',
+                        phone: 'phone',
+                        altPhone: 'officePhone',
+                        fax: vendor.Fax,
+                        altEmail: 'altEmail',
+                        url: 'webAddress',
+                        defaultAddress : 'billingAddress',
+                        //defaultShippingAddress: vendor['Shipping Address'],
+                        isInactive: 'inactive',
+                        subsidiary: 'subsidiary'
+                    }
+                    for (const row of data.rows) {
+                    const netsuiteVendor = {};
+                    for (const [header, netsuiteKey] of Object.entries(netsuiteKeyMap)) {
+                        const matchedKey = Object.keys(row).find(
+                            k => k.toLowerCase().includes(header.toLowerCase())
+                        );
+                        // 1. Direct match
+                        if (row.hasOwnProperty(header.replace(' ', '').toLowerCase())) {
+                            netsuiteVendor[netsuiteKey] = row[header];
+                        }
+                        // 2. Partial match
+                        else if (matchedKey) {
+                            netsuiteVendor[netsuiteKey] = row[matchedKey];
+                        }
+                        else {
+                            // 3. Default mapping (optional: set to null or provide a default value)
+                        if(netsuiteKey === 'itemType') {
+                            netsuiteVendor[netsuiteKey] = 'inventoryitem';
+                        }
+                            else {
+                                netsuiteVendor[netsuiteKey] = null;
+                            }
+                        }
+                    }
+                    // Post to Netsuite
+                    try {
+                        const response = await postVendor('vendor', netsuiteVendor, process.env.BASE_URL_REST);
+                        console.log('Posted vendor from product_ext:', response);
+                    } catch (err) {
+                        console.error('Error posting vendor from product_ext:', err);
+                    }
+                    }  
+                }
+            }
         }
-    }
     catch (error) {
         console.error('Error in addVendor:', error);
     }
 }
 
 // THis function reads inventory items from a CSV file and posts them to Netsuite
-async function addInventoryItem() {
+async function addInventoryItem(file) {
     try {
+        if(file === true) {
         const items = await readCsvToObjects(inputFolder);
         for (const item of items) {
-            const response = await postInventoryItem('inventoryItem', item, process.env.BASE_URL_REST);
-            console.log('inventoryItem posted successfully:', response);
+            const i = {
+                itemType: "inventoryitem",
+                internalId: item['Internal ID'],
+                name: item['Name'],
+                externalId: item['External ID'],
+                itemId: item['External ID'],
+                displayName: item['Display Name'],
+                inactive: item['Inactive'],
+                description: item['Description'],
+                type: item['Type'],
+                unitPrice: item['Unit Price'],
+                purchasePrice: item['Purchase Price'],
+                priceByUom: item['Price by UOM'],
+                basePrice: item['Base Price'],
+                primaryPurchaseUnit: item['Primary Purchase Unit'],
+                primaryStockUnit: item['Primary Stock Unit'],
+                primarySaleUnit: item['Primary Sale Unit'],
+                salesQtyPerPackUnit: item['Sales Qty Per Pack Unit'],
+                salesPackagingUnit: item['Sales Packaging Unit'],
+                pcsInABox: item['Pcs in a Box'],
+                sqftByPcsSheet: item['SQFT by Pcs/Sheet'],
+                sqftByBox: item['SQFT By Box'],
+                saleUnit: item['Sale Unit'],
+                priceLevel: item['Price Level'],
+                itemNumberAndName: item['Item Number and Name'],
+                itemNameOnly: item['Item Name Only'],
+                customShopifyVariantId: item['CUSTOM SHOPIFY VARIANT ID'],
+                weightPerSf: item['WEIGHT PER SF'],
+                weightPerPc: item['WEIGHT PER PC'],
+                vendor: item['Vendor'],
+                itemCollection: item['Item Collection'],
+                subType: item['SubType'],
+                subsidiary: item['Subsidiary'] ? "Elit Tile Consolidated : ElitTile.com" ? "3" : "1" : "1",
+                vendorCode: item['Vendor Code'],
+                vendorName: item['Vendor Name'],
+                series: item['SERIES'],
+                itemSize: item['Item Size'],
+                itemColor: item['Item Color'],
+                finish: item['FINISH'],
+                tileShape: item['Tile Shape'],
+                mosaicShape: item['Mosaic Shape'],
+                mosaicChipSize: item['Mosaic Chip Size'],
+                class: item['Class'],
+                className: item['Class Name'],
+                subClass: item['Sub-Class'],
+                design: item['Design'],
+                side: item['Side'],
+                thickness: item['THICKNESS'],
+                oldPackaging: item['Old Packaging'],
+                oldPackagingDate: item['Old Packaging Date'],
+                shape: item['SHAPE'],
+                edge: item['EDGE'],
+                nameInWebsite: item['Name in Website'],
+                unitType: item['Unit Type'],
+                parent: item['Parent'],
+                includeChildren: item['Include Children'],
+                department: item['Department'],
+                location: item['Location'],
+                costingMethod: item['Costing Method'],
+                purchaseDescription: item['Purchase Description'],
+                stockDescription: item['Stock Description'],
+                matchBillToReceipt: item['Match Bill To Receipt'],
+                useBins: item['Use Bins'],
+                reorderMultiple: item['Reorder Multiple'],
+                autoReorderPoint: item['Auto Reorder Point'],
+                autoLeadTime: item['Auto Lead Time'],
+                safetyStockLevel: item['Safety Stock Level'],
+                transferPrice: item['Transfer Price'],
+                preferredLocation: item['Preferred Location'],
+                binNumber: item['Bin Number'],
+                vendorSchedule: item['Vendor Schedule'],
+                taxSchedule: item['Tax Schedule'] ? "Taxable" ? "1" : "2" : "2",
+                dropShipItem: item['Drop Ship Item'],
+                weight: item['Weight'],
+                weightOfSellUnitShopify: item['Weight of sell-unit Shopify'],
+                idShopify: item['ID Shopify'],
+                depth: item['Depth'],
+                width: item['Width'],
+                height: item['Height'],
+                netsuiteECode: item['NetSuite E Code'],
+                netsuiteVCode: item['NetSuite V Code']
+            }
+                const response = await postInventoryItem('inventoryItem', i, process.env.BASE_URL_REST);
+                console.log('inventoryItem posted successfully:', response);
+            }
+        }
+        else {
+            const data = await queryTable('SELECT * FROM integration.product_ext');
+            console.log('Data from product_ext:', data);
+            if (data && data.rows && data.rows.length > 0) {
+                // Map product_ext headers to Netsuite keys
+                const netsuiteKeyMap = {
+                    // product_ext column : Netsuite key
+                    'Item Type': 'itemType',
+                    'Internal ID': 'internalId',
+                    'Item ID': 'itemId',
+                    'Name': 'name',
+                    'External ID': 'externalId',
+                    'Display Name': 'displayName',
+                    'Inactive': 'inactive',
+                    'Description': 'description',
+                    'Type': 'type',
+                    'Unit Price': 'unitPrice',
+                    'Purchase Price': 'purchasePrice',
+                    'Price by UOM': 'priceByUom',
+                    'Base Price': 'basePrice',
+                    'Primary Purchase Unit': 'primaryPurchaseUnit',
+                    'Primary Stock Unit': 'primaryStockUnit',
+                    'Primary Sale Unit': 'primarySaleUnit',
+                    'Sales Qty Per Pack Unit': 'salesQtyPerPackUnit',
+                    'Sales Packaging Unit': 'salesPackagingUnit',
+                    'Pcs in a Box': 'pcsInABox',
+                    'SQFT by Pcs/Sheet': 'sqftByPcsSheet',
+                    'SQFT By Box': 'sqftByBox',
+                    'Sale Unit': 'saleUnit',
+                    'Price Level': 'priceLevel',
+                    'Item Number and Name': 'itemNumberAndName',
+                    'Item Name Only': 'itemNameOnly',
+                    'CUSTOM SHOPIFY VARIANT ID': 'customShopifyVariantId',
+                    'WEIGHT PER SF': 'weightPerSf',
+                    'WEIGHT PER PC': 'weightPerPc',
+                    'Vendor': 'vendor',
+                    'Item Collection': 'itemCollection',
+                    'SubType': 'subType',
+                    'Subsidiary': 'subsidiary',
+                    'Vendor Code': 'vendorCode',
+                    'Vendor Name': 'vendorName',
+                    'SERIES': 'series',
+                    'Item Size': 'itemSize',
+                    'Item Color': 'itemColor',
+                    'FINISH': 'finish',
+                    'Tile Shape': 'tileShape',
+                    'Mosaic Shape': 'mosaicShape',
+                    'Mosaic Chip Size': 'mosaicChipSize',
+                    'Class': 'class',
+                    'Class Name': 'className',
+                    'Sub-Class': 'subClass',
+                    'Design': 'design',
+                    'Side': 'side',
+                    'THICKNESS': 'thickness',
+                    'Old Packaging': 'oldPackaging',
+                    'Old Packaging Date': 'oldPackagingDate',
+                    'SHAPE': 'shape',
+                    'EDGE': 'edge',
+                    'Name in Website': 'nameInWebsite',
+                    'Unit Type': 'unitsType',
+                    'Parent': 'parent',
+                    'Include Children': 'includeChildren',
+                    'Department': 'department',
+                    'Location': 'location',
+                    'Costing Method': 'costingMethod',
+                    'Purchase Description': 'purchaseDescription',
+                    'Stock Description': 'stockDescription',
+                    'Match Bill To Receipt': 'matchBillToReceipt',
+                    'Use Bins': 'useBins',
+                    'Reorder Multiple': 'reorderMultiple',
+                    'Auto Reorder Point': 'autoReorderPoint',
+                    'Auto Lead Time': 'autoLeadTime',
+                    'Safety Stock Level': 'safetyStockLevel',
+                    'Transfer Price': 'transferPrice',
+                    'Preferred Location': 'preferredLocation',
+                    'Bin Number': 'binNumber',
+                    'Vendor Schedule': 'vendorSchedule',
+                    'Tax Schedule': 'taxSchedule',
+                    'Drop Ship Item': 'dropShipItem',
+                    'Weight': 'weight',
+                    'Weight of sell-unit Shopify': 'weightOfSellUnitShopify',
+                    'ID Shopify': 'idShopify',
+                    'Depth': 'depth',
+                    'Width': 'width',
+                    'Height': 'height',
+                    'NetSuite E Code': 'netsuiteECode',
+                    'NetSuite V Code': 'netsuiteVCode'
+                };
+                const netsuiteItem = {
+                    itemType: 'inventoryitem' // Default value,
+                };
+                for (const row of data.rows) {
+                    for (const [header, netsuiteKey] of Object.entries(netsuiteKeyMap)) {
+                        const matchedKey = Object.keys(row).find(
+                            k => k.toLowerCase().includes(header.toLowerCase())
+                        );
+                        // 1. Direct match
+                        if (row.hasOwnProperty(header.replace(' ', '').toLowerCase())) {
+                            netsuiteItem[netsuiteKey] = row[header];
+                        }
+                        // 2. Partial match
+                        else if (matchedKey) {
+                            netsuiteItem[netsuiteKey] = row[matchedKey];
+                        }
+                        else {
+                            // 3. Default mapping (optional: set to null or provide a default value)
+                            if(netsuiteKey === 'itemType') {
+                                netsuiteItem[netsuiteKey] = 'inventoryitem';
+                            }
+                            else {
+                                netsuiteItem[netsuiteKey] = null;
+                            }
+                        }
+                    }
+                    // Post to Netsuite
+                    try {
+                        console.log('Netsuite Item to be posted:', netsuiteItem);
+                        netsuiteItem.itemId = row['externalid'];
+                        netsuiteItem.taxSchedule = row['taxschedule'] ? "Taxable" ? "1" : "2" : "2";
+                        const response = await postInventoryItem('inventoryItem', netsuiteItem, process.env.BASE_URL_REST);
+                        console.log('Posted inventoryItem from product_ext:', response);
+                    } catch (err) {
+                        console.error('Error posting inventoryItem from product_ext:', err);
+                    }
+                }   
+            } else {
+                console.log('No data found in product_ext table.');
+            }
         }
     }
     catch (error) {
@@ -400,7 +740,26 @@ async function addUOM() {
     try {
         const uoms = await readCsvToObjects(inputFolder);
         for (const uom of uoms) { 
-            const response = await postUOM('unitsType', uom);
+            const u = {
+                //"externalId": uom['Item(Type Name)'],
+                //"isInactive": uom['is Inactive'] ? false : true,
+                "name": uom['Item(Type Name)'],
+                "uom": {
+                    "items": [
+                        {
+                            "unitName": uom['Unit Name (Name)'],
+                            "pluralName": uom['Plural Name'],
+                            "abbreviation": uom.Abbreviation,
+                            "pluralAbbreviation": uom['Plural Abbreviation'],
+                            "conversionRate": Number(uom['Conversion Rate (/Base)']),
+                            "baseUnit": uom['Base Unit'] ? 'YES' ? true : false : false,
+                            "inUse": uom['in Use'] ? true : false,
+                            //"name": uom['Item(Type Name)'],
+                        }
+                    ]
+                }
+            }
+            const response = await postUOM('unitsType', u);
             console.log('UOM posted successfully:', response);
         }
     }
@@ -408,6 +767,8 @@ async function addUOM() {
         console.error('Error in UOM:', error);
     }
 }
+
+// Sample function calls to demonstrate usage
 
 // getUOM().then((uoms) => {
 //     console.log('UOMs:', uoms);
@@ -450,11 +811,11 @@ async function addUOM() {
 //     console.error('Error in postVendor:', error);
 // });
 
-postUOM().then((response) => {
-    console.log('UOM posted successfully:', response);
-}).catch((error) => {
-    console.error('Error in postUOM:', error);
-});
+// postUOM().then((response) => {
+//     console.log('UOM posted successfully:', response);
+// }).catch((error) => {
+//     console.error('Error in postUOM:', error);
+// });
 
 // postInventoryItem('','',process.env.BASE_URL_REST).then((response) => {
 //     console.log('Inventory Item:', response)
@@ -474,3 +835,10 @@ postUOM().then((response) => {
 //     console.error('Error in getRecords:', error);
 // });
 
+// Run the desired function(s) here: 
+
+//addUOM();
+//addInventoryItem();
+//addVendor();
+
+addInventoryItem(false)
