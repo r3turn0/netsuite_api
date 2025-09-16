@@ -160,8 +160,8 @@ async function postRecord(p, b, r, m) {
         const response = await nClient.request({
             path: p,
             body: JSON.stringify(b),
-            method: m || 'POST',
-            restletUrl: r || null
+            restletUrl: r || null,
+            method: m || 'POST'
         });
         console.log('Response from postRecord:', response);
         return new Promise((resolve, reject) => {
@@ -313,7 +313,9 @@ async function getVendor(limit, offset) {
 }
 
 // Post a vendor, requires a customForm and subsidiary to be set
-async function postVendor(p, b) {
+async function postVendor(p, b, r, m) {
+    const method = m || 'POST';
+    const restletUrl = r || null;
     const path = p || 'vendor';
     const body = b || {
         "companyName": "Vendor Test Ericta2",
@@ -325,7 +327,7 @@ async function postVendor(p, b) {
         "subsidiary": "3"
     }
     try {
-        const response = await postRecord(path, body);
+        const response = await postRecord(path, body, restletUrl, method);
         console.log('Response from postVendor:', response.statusCode, response.data);
         return new Promise((resolve, reject) => {
             if(response.statusCode === 204) {
@@ -343,7 +345,8 @@ async function postVendor(p, b) {
 }
 
 // Post an inventoryItem that requires a TaxSchedule to be set and this example uses a RESTlet URL
-async function postInventoryItem(p, b, r) {
+async function postInventoryItem(p, b, r, m) {
+    const method = m || 'POST';
     const restletUrl = r || null;
     const path = p || 'inventoryItem';
     const body = b || {
@@ -352,7 +355,7 @@ async function postInventoryItem(p, b, r) {
         "itemType":"inventoryitem"
     }
     try {
-        const response = await postRecord(path, body, restletUrl, 'PUT');
+        const response = await postRecord(path, body, restletUrl, method);
         console.log('Response from postInventoryItem:', response);
         return response;
     }
@@ -363,7 +366,9 @@ async function postInventoryItem(p, b, r) {
 }
 
 // Post a UOM, requires that an inventoryItem or externalId to be created first to link to the UOM
-async function postUOM(p, b) {
+async function postUOM(p, b, r, m) {
+    const method = m || 'POST';
+    const restletUrl = r || null;
     const path = p || 'unitsType';
     const body = b || {
         "externalId": "ACS-TESTITEM1",
@@ -385,7 +390,7 @@ async function postUOM(p, b) {
         }
     }
     try {
-        const response = await postRecord(path, body);
+        const response = await postRecord(path, body, restletUrl, method);
         console.log('Response from postUOM:', response);
         return response;
     }
@@ -414,10 +419,10 @@ async function readCsvToObjects(folderPath) {
     return allResults;
 }
 
-// The following functions read from CSV files and post the data to Netsuite
+// The following functions read from CSV files or Postgres tables to post the data to Netsuite
 
 // This function reads vendors from a CSV file and posts them to Netsuite
-async function addVendor(file) {
+async function addVendor(file, sql) {
     try {
         if(file) {
             const vendors = await readCsvToObjects(inputFolder);
@@ -446,7 +451,7 @@ async function addVendor(file) {
                 }
             }
             else {
-                const data = await queryTable('SELECT * FROM integration.vendor_ext');
+                const data = await queryTable(sql || 'SELECT * FROM integration.vendor');
                 console.log('Data from vendor_ext:', data);
                 if (data && data.rows && data.rows.length > 0) {
                     // Map vendor_ext headers to Netsuite keys
@@ -484,9 +489,9 @@ async function addVendor(file) {
                         }
                         else {
                             // 3. Default mapping (optional: set to null or provide a default value)
-                        if(netsuiteKey === 'itemType') {
-                            netsuiteVendor[netsuiteKey] = 'inventoryitem';
-                        }
+                            if(netsuiteKey === 'itemType') {
+                                netsuiteVendor[netsuiteKey] = 'inventoryitem';
+                            }
                             else {
                                 netsuiteVendor[netsuiteKey] = null;
                             }
@@ -495,9 +500,9 @@ async function addVendor(file) {
                     // Post to Netsuite
                     try {
                         const response = await postVendor('vendor', netsuiteVendor, process.env.BASE_URL_REST);
-                        console.log('Posted vendor from product_ext:', response);
+                        console.log('Posted vendor:', response);
                     } catch (err) {
-                        console.error('Error posting vendor from product_ext:', err);
+                        console.error('Error posting vendor:', err);
                     }
                     }  
                 }
@@ -509,7 +514,7 @@ async function addVendor(file) {
 }
 
 // THis function reads inventory items from a CSV file and posts them to Netsuite
-async function addInventoryItem(file) {
+async function addInventoryItem(file, sql) {
     try {
         if(file === true) {
         const items = await readCsvToObjects(inputFolder);
@@ -601,113 +606,139 @@ async function addInventoryItem(file) {
             }
         }
         else {
-            const data = await queryTable('SELECT * FROM integration.product_ext');
-            console.log('Data from product_ext:', data);
+            const data = await queryTable(sql || 'SELECT * FROM integration.product');
+            console.log('Data from product:', data);
             if (data && data.rows && data.rows.length > 0) {
                 // Map product_ext headers to Netsuite keys
                 const netsuiteKeyMap = {
-                    // product_ext column : Netsuite key
-                    'Item Type': 'itemType',
-                    'Internal ID': 'internalId',
-                    'Item ID': 'itemId',
-                    'Name': 'name',
-                    'External ID': 'externalId',
-                    'Display Name': 'displayName',
-                    'Inactive': 'inactive',
-                    'Description': 'description',
-                    'Type': 'type',
-                    'Unit Price': 'unitPrice',
-                    'Purchase Price': 'purchasePrice',
-                    'Price by UOM': 'priceByUom',
-                    'Base Price': 'basePrice',
-                    'Primary Purchase Unit': 'primaryPurchaseUnit',
-                    'Primary Stock Unit': 'primaryStockUnit',
-                    'Primary Sale Unit': 'primarySaleUnit',
-                    'Sales Qty Per Pack Unit': 'salesQtyPerPackUnit',
-                    'Sales Packaging Unit': 'salesPackagingUnit',
-                    'Pcs in a Box': 'pcsInABox',
-                    'SQFT by Pcs/Sheet': 'sqftByPcsSheet',
-                    'SQFT By Box': 'sqftByBox',
-                    'Sale Unit': 'saleUnit',
-                    'Price Level': 'priceLevel',
-                    'Item Number and Name': 'itemNumberAndName',
-                    'Item Name Only': 'itemNameOnly',
-                    'CUSTOM SHOPIFY VARIANT ID': 'customShopifyVariantId',
-                    'WEIGHT PER SF': 'weightPerSf',
-                    'WEIGHT PER PC': 'weightPerPc',
-                    'Vendor': 'vendor',
-                    'Item Collection': 'itemCollection',
-                    'SubType': 'subType',
-                    'Subsidiary': 'subsidiary',
-                    'Vendor Code': 'vendorCode',
-                    'Vendor Name': 'vendorName',
-                    'SERIES': 'series',
-                    'Item Size': 'itemSize',
-                    'Item Color': 'itemColor',
-                    'FINISH': 'finish',
-                    'Tile Shape': 'tileShape',
-                    'Mosaic Shape': 'mosaicShape',
-                    'Mosaic Chip Size': 'mosaicChipSize',
-                    'Class': 'class',
-                    'Class Name': 'className',
-                    'Sub-Class': 'subClass',
-                    'Design': 'design',
-                    'Side': 'side',
-                    'THICKNESS': 'thickness',
-                    'Old Packaging': 'oldPackaging',
-                    'Old Packaging Date': 'oldPackagingDate',
-                    'SHAPE': 'shape',
-                    'EDGE': 'edge',
-                    'Name in Website': 'nameInWebsite',
-                    'Unit Type': 'unitsType',
-                    'Parent': 'parent',
-                    'Include Children': 'includeChildren',
-                    'Department': 'department',
-                    'Location': 'location',
-                    'Costing Method': 'costingMethod',
-                    'Purchase Description': 'purchaseDescription',
-                    'Stock Description': 'stockDescription',
-                    'Match Bill To Receipt': 'matchBillToReceipt',
-                    'Use Bins': 'useBins',
-                    'Reorder Multiple': 'reorderMultiple',
-                    'Auto Reorder Point': 'autoReorderPoint',
-                    'Auto Lead Time': 'autoLeadTime',
-                    'Safety Stock Level': 'safetyStockLevel',
-                    'Transfer Price': 'transferPrice',
-                    'Preferred Location': 'preferredLocation',
-                    'Bin Number': 'binNumber',
-                    'Vendor Schedule': 'vendorSchedule',
-                    'Tax Schedule': 'taxSchedule',
-                    'Drop Ship Item': 'dropShipItem',
-                    'Weight': 'weight',
-                    'Weight of sell-unit Shopify': 'weightOfSellUnitShopify',
-                    'ID Shopify': 'idShopify',
-                    'Depth': 'depth',
-                    'Width': 'width',
-                    'Height': 'height',
-                    'NetSuite E Code': 'netsuiteECode',
-                    'NetSuite V Code': 'netsuiteVCode'
+                    // product table column : netsuite key
+                    'item_type': 'itemType',
+                    'internalid': 'id',
+                    'itemid': 'itemId',
+                    'name': 'name',
+                    'externalid': 'externalId',
+                    'displayname': 'displayName',
+                    'isinactive': 'isinactive',
+                    'description': 'description',
+                    'type': 'itemType',
+                    'unit_price': 'unitPrice',
+                    'purchase_price': 'purchasePrice',
+                    'custitem_bit_pricebysqft': 'priceByUom',
+                    'base_price': 'basePrice',
+                    'primary_purchase_unit': 'primaryPurchaseUnit',
+                    'primary_stock_unit': 'primaryStockUnit',
+                    'primary_sale_Unit': 'primarySaleUnit',
+                    'sales_qty_per_pack_unit': 'salesQtyPerPackUnit',
+                    'sales_packaging_unit': 'salesPackagingUnit',
+                    'pcs_in_a_box': 'pcsInABox',
+                    'sqft_by_pcs_sheet': 'sqftByPcsSheet',
+                    'sqft_by_box': 'sqftByBox',
+                    'sale_unit': 'saleUnit',
+                    'price_level': 'priceLevel',
+                    'item_number_and_name': 'itemNumberAndName',
+                    'item_name_only': 'itemNameOnly',
+                    'custom_shopify_variant_id': 'customShopifyVariantId',
+                    'weight_per_sf': 'weightPerSf',
+                    'weight_per_pc': 'weightPerPc',
+                    'vendor': 'vendor',
+                    'item_collection': 'itemCollection',
+                    'subtype': 'subType',
+                    'subsidiary': 'subsidiary',
+                    'vendor_code': 'vendorCode',
+                    'vendor_name': 'vendorName',
+                    'series': 'series',
+                    'item_size': 'itemSize',
+                    'item_color': 'itemColor',
+                    'finish': 'finish',
+                    'tile_shape': 'tileShape',
+                    'mosaic_shape': 'mosaicShape',
+                    'mosaic_chip_size': 'mosaicChipSize',
+                    'class': 'class',
+                    'class_name': 'className',
+                    'sub_class': 'subClass',
+                    'design': 'design',
+                    'side': 'side',
+                    'thickness': 'thickness',
+                    'old_packaging': 'oldPackaging',
+                    'old_packaging_date': 'oldPackagingDate',
+                    'shape': 'shape',
+                    'edge': 'edge',
+                    'name_in_website': 'nameInWebsite',
+                    'unit_type': 'unitsType',
+                    'parent': 'parent',
+                    'include_children': 'includeChildren',
+                    'department': 'department',
+                    'location': 'location',
+                    'costing_method': 'costingMethod',
+                    'purchase_description': 'purchaseDescription',
+                    'stock_description': 'stockDescription',
+                    'match_bill_to_receipt': 'matchBillToReceipt',
+                    'use_bins': 'useBins',
+                    'reorder_multiple': 'reorderMultiple',
+                    'auto_reorder_point': 'autoReorderPoint',
+                    'auto_lead_time': 'autoLeadTime',
+                    'safety_stock_level': 'safetyStockLevel',
+                    'transfer_price': 'transferPrice',
+                    'preferred_location': 'preferredLocation',
+                    'bin_number': 'binNumbers',
+                    'vendor_schedule': 'vendorSchedule',
+                    'tax_schedule': 'taxSchedule',
+                    'drop_ship_item': 'isDropShipItem',
+                    'weight': 'weight',
+                    'weight_of_sell_unit_shopify': 'custitem9',
+                    'id_shopify': 'custitem4',
+                    'depth': 'custitembit_depth',
+                    'width': 'custitem_bit_width',
+                    'height': 'custitembit_height',
+                    'netsuiteECode': 'custitemnetsuite_e_code',
+                    'netsuiteECode': 'custitem11'
                 };
                 const netsuiteItem = {
                     itemType: 'inventoryitem' // Default value,
                 };
                 for (const row of data.rows) {
                     for (const [header, netsuiteKey] of Object.entries(netsuiteKeyMap)) {
-                        const matchedKey = Object.keys(row).find(
-                            k => k.toLowerCase().includes(header.toLowerCase())
+                        const matchedKey1 = Object.keys(row).find(
+                            k => k.toLowerCase().includes(header.replace(' ','_').toLowerCase())
+                        );
+                        const matchedKey2 = Object.keys(row).find(
+                            k => k.toLowerCase().includes(netsuiteKey.toLowerCase())
                         );
                         // 1. Direct match
-                        if (row.hasOwnProperty(header.replace(' ', '').toLowerCase())) {
-                            netsuiteItem[netsuiteKey] = row[header];
+                        if (row.hasOwnProperty(header.replace(' ', '_').toLowerCase())) {
+                            netsuiteItem[netsuiteKey] = row[header.replace(' ', '_').toLowerCase()];
+                        }
+                        else if(row.hasOwnProperty(header.replace(' ', '').toLowerCase())) {
+                            netsuiteItem[netsuiteKey] = row[header.replace(' ', '').toLowerCase()];
                         }
                         // 2. Partial match
-                        else if (matchedKey) {
-                            netsuiteItem[netsuiteKey] = row[matchedKey];
+                        else if (matchedKey1) {
+                            netsuiteItem[netsuiteKey] = row[matchedKey1];
+                        }
+                        else if(matchedKey2) {
+                            netsuiteItem[netsuiteKey] = row[matchedKey2];
+                        }
+                        // Try to match netsuiteKey to a row header (case-insensitive)
+                        else if (
+                            Object.keys(row).some(
+                                k => k.toLowerCase() === netsuiteKey.toLowerCase()
+                            )
+                        ) {
+                            const exactKey = Object.keys(row).find(
+                                k => k.toLowerCase() === netsuiteKey.toLowerCase()
+                            );
+                            netsuiteItem[netsuiteKey] = row[exactKey];
                         }
                         else {
                             // 3. Default mapping (optional: set to null or provide a default value)
                             if(netsuiteKey === 'itemType') {
                                 netsuiteItem[netsuiteKey] = 'inventoryitem';
+                            }
+                            else if(netsuiteKey === 'isinactive') {
+                                netsuiteItem[netsuiteKey] = row['inactive'] ? true : false;
+                            }
+                            else if(netsuiteKey === 'taxschedule') {
+                                netsuiteItem[netsuiteKey] = row['taxschedule'] ? "Taxable" ? "1" : "2" : "2";
                             }
                             else {
                                 netsuiteItem[netsuiteKey] = null;
@@ -718,15 +749,17 @@ async function addInventoryItem(file) {
                     try {
                         console.log('Netsuite Item to be posted:', netsuiteItem);
                         netsuiteItem.itemId = row['externalid'];
-                        netsuiteItem.taxSchedule = row['taxschedule'] ? "Taxable" ? "1" : "2" : "2";
+                        netsuiteItem.id = row['internalid'] || null;
                         const response = await postInventoryItem('inventoryItem', netsuiteItem, process.env.BASE_URL_REST);
-                        console.log('Posted inventoryItem from product_ext:', response);
+                        console.log('Posted inventoryItem from product:', response);
+                        const updateResponse = await postInventoryItem('inventoryItem', netsuiteItem);
+                        console.log('Updated inventoryItem from product:', updateResponse);
                     } catch (err) {
-                        console.error('Error posting inventoryItem from product_ext:', err);
+                        console.error('Error posting inventoryItem from product:', err);
                     }
                 }   
             } else {
-                console.log('No data found in product_ext table.');
+                console.log('No data found in product table.');
             }
         }
     }
@@ -736,13 +769,14 @@ async function addInventoryItem(file) {
 }
 
 // This function reads UOMs from a CSV file and posts them to Netsuite
-async function addUOM() {
+async function addUOM(file, sql) {
     try {
+        if(file) {
         const uoms = await readCsvToObjects(inputFolder);
         for (const uom of uoms) { 
             const u = {
-                //"externalId": uom['Item(Type Name)'],
-                //"isInactive": uom['is Inactive'] ? false : true,
+                "externalId": uom['Item(Type Name)'],
+                "isInactive": uom['inactive'] ? true : false,
                 "name": uom['Item(Type Name)'],
                 "uom": {
                     "items": [
@@ -754,17 +788,53 @@ async function addUOM() {
                             "conversionRate": Number(uom['Conversion Rate (/Base)']),
                             "baseUnit": uom['Base Unit'] ? 'YES' ? true : false : false,
                             "inUse": uom['in Use'] ? true : false,
-                            //"name": uom['Item(Type Name)'],
                         }
                     ]
                 }
             }
-            const response = await postUOM('unitsType', u);
-            console.log('UOM posted successfully:', response);
+                const response = await postUOM('unitsType', u);
+                console.log('UOM posted successfully:', response);
+            }
+        }
+        else {
+            const data = await queryTable(sql || 'SELECT * FROM integration.uom');
+            console.log('Data from uom:', data);
+            if (data && data.rows && data.rows.length > 0) {
+                for (const row of data.rows) {
+                    const netsuiteItem = {
+                        "externalId": row['externalid'],
+                        "isInactive": row['inactive'] ? true : false,
+                        "name": row['name'],
+                        'uom': {
+                                'items': [{
+                                        unitName: row['unitname'],
+                                        pluralName: row['pluralname'],
+                                        abbreviation: row['abbreviation'],
+                                        pluralAbbreviation: row['pluralabbreviation'],
+                                        conversionRate: Number(row['conversionrate']),
+                                        baseUnit: row['baseunit'] ? 'YES' ? true : false : false,
+                                        inUse: row['inuse'] ? true : false
+                                    }
+                                ]
+                            }
+                        }
+                    // Post to Netsuite
+                    try {
+                        console.log('Netsuite Uom to be posted:', netsuiteItem);
+                        const response = await postUOM('unitsType', netsuiteItem);
+                        console.log('Posted unitsType', response);
+                    } catch (err) {
+                        console.error('Error posting UOM:', err);
+                    }
+                }
+            }
+            else {
+                console.log('No data found in UOM table.');
+            }
         }
     }
     catch (error) {
-        console.error('Error in UOM:', error);
+        console.error('Error in the UOM:', error);
     }
 }
 
@@ -841,4 +911,17 @@ async function addUOM() {
 //addInventoryItem();
 //addVendor();
 
-addInventoryItem(false)
+async function insertTestData() {
+    const sql = 'SELECT * from integration.product ORDER BY externalid LIMIT 1';
+    try {
+        //const uomResponse = await addUOM(false, '');
+        //console.log('UOM Response:', uomResponse);
+        const inventoryResponse = await addInventoryItem(false, sql);
+        console.log('Inventory Item Response:', inventoryResponse);
+    }
+    catch(e) {
+        console.log('Error in insertTestData:', e);
+    }
+}
+
+insertTestData();
