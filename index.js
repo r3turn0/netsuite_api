@@ -37,11 +37,12 @@ for (const [key, value] of Object.entries(nConfig)) {
 
 // Remove the shared client, use pool or create client per function
 const pool = new pg.Pool(config);
-const client = new pg.Client(config);
+//const client = new pg.Client(config);
 const nClient = new NetsuiteApiClient(nConfig);
 
 // This function runs a query to get column names and data types from information_schema for a specified table in PostgreSQL
 async function tableInfoQuery(table) {
+    const client = new pg.Client(config);
     try {
         await client.connect();
         // SELECT column_name, data_type FROM information_schema.columns WHERE table_schema= 'integration' AND table_name = 'product_ext';
@@ -65,6 +66,7 @@ async function tableInfoQuery(table) {
 
 // This function runs a query to get records from a specified table in PostgreSQL
 async function queryTable(sql) {
+    const client = new pg.Client(config);
     try {
         await client.connect();
         const res = await client.query(sql);
@@ -194,7 +196,7 @@ async function getInventoryItem(limit,offset) {
                 resolve(inventoryItem);
             }
             else {
-                reject(new Error('No vendors found'));
+                reject(new Error('No inventoryItem found'));
             }
         });
     } catch (error) {
@@ -508,14 +510,14 @@ async function addVendor(file, sql) {
                 }
             }
         }
-    catch (error) {
-        console.error('Error in addVendor:', error);
+        catch (error) {
+            console.error('Error in addVendor:', error);
+        }
     }
-}
-
-// THis function reads inventory items from a CSV file and posts them to Netsuite
-async function addInventoryItem(file, sql) {
-    try {
+    
+    // THis function reads inventory items from a CSV file and posts them to Netsuite
+    async function addInventoryItem(file, sql) {
+        try {
         if(file === true) {
         const items = await readCsvToObjects(inputFolder);
         for (const item of items) {
@@ -606,6 +608,8 @@ async function addInventoryItem(file, sql) {
             }
         }
         else {
+            const fields = await tableInfoQuery('product');
+            console.log('Fields from product:', fields);
             const data = await queryTable(sql || 'SELECT * FROM integration.product');
             console.log('Data from product:', data);
             if (data && data.rows && data.rows.length > 0) {
@@ -693,11 +697,20 @@ async function addInventoryItem(file, sql) {
                     'netsuiteECode': 'custitemnetsuite_e_code',
                     'netsuiteECode': 'custitem11'
                 };
+                for(var i = 0; i < fields.rows.length; i++) {
+                    if(fields.rows[i].column_name && !netsuiteKeyMap[fields.rows[i].column_name]) {
+                        netsuiteKeyMap[fields.rows[i].column_name] = fields.rows[i].column_name; // Default to same name if no mapping exists
+                        console.log(`No mapping found for column: ${fields.rows[i].column_name}`);
+                    }
+                }
                 const netsuiteItem = {
                     itemType: 'inventoryitem' // Default value,
                 };
                 for (const row of data.rows) {
                     for (const [header, netsuiteKey] of Object.entries(netsuiteKeyMap)) {
+                        if(netsuiteKey === 'subsidiary') {
+                            netsuiteItem[netsuiteKey] = row['subsidiary'] ? row['subsidiary'] : 10;
+                        }
                         const matchedKey1 = Object.keys(row).find(
                             k => k.toLowerCase().includes(header.replace(' ','_').toLowerCase())
                         );
@@ -911,17 +924,39 @@ async function addUOM(file, sql) {
 //addInventoryItem();
 //addVendor();
 
-async function insertTestData() {
+async function insertInventoryItem() {
     const sql = 'SELECT * from integration.product ORDER BY externalid LIMIT 1';
     try {
-        //const uomResponse = await addUOM(false, '');
-        //console.log('UOM Response:', uomResponse);
         const inventoryResponse = await addInventoryItem(false, sql);
         console.log('Inventory Item Response:', inventoryResponse);
     }
     catch(e) {
-        console.log('Error in insertTestData:', e);
+        console.log('Error in insertInventoryItem:', e);
     }
 }
 
-insertTestData();
+async function insertUOM() {
+    const sql = 'SELECT * from integration.UOM';
+    try {
+        const uomResponse = await addUOM(false, sql);
+        console.log('UOM Response:', uomResponse);
+    }
+    catch(e) {
+        console.log('Error in insertUOM:', e);
+    }
+}
+
+async function insertVendor() {
+    const sql = 'SELECT * from integration.vendor';
+    try {
+        const vendorResponse = await addVendor(false, sql);
+        console.log('Vendor Response:', vendorResponse);
+    }
+    catch(e) {
+        console.log('Error in insertVendor:', e);
+    }
+}
+
+insertInventoryItem();
+insertUOM();
+insertVendor();
