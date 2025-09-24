@@ -709,7 +709,12 @@ async function addVendor(file, sql) {
                 for (const row of data.rows) {
                     for (const [header, netsuiteKey] of Object.entries(netsuiteKeyMap)) {
                         if(netsuiteKey === 'subsidiary') {
-                            netsuiteItem[netsuiteKey] = row['subsidiary'] ? row['subsidiary'] : 10;
+                            netsuiteItem[netsuiteKey] = row['subsidiary'] ? parseInt(row['subsidiary']) : parseInt('10');
+                            continue;
+                        }
+                        if(netsuiteItem[netsuiteKey] === 'true' || netsuiteItem[netsuiteKey] === 'false') {
+                            netsuiteItem[netsuiteKey] = netsuiteItem[netsuiteKey] === 'true' ? JSON.stringify('true') : JSON.stringify('false');
+                            continue;
                         }
                         const matchedKey1 = Object.keys(row).find(
                             k => k.toLowerCase().includes(header.replace(' ','_').toLowerCase())
@@ -851,6 +856,79 @@ async function addUOM(file, sql) {
     }
 }
 
+async function insertInventoryItem() {
+    const sql = 'SELECT * from integration.product ORDER BY externalid LIMIT 1';
+    try {
+        const inventoryResponse = await addInventoryItem(false, sql);
+        console.log('Inventory Item Response:', inventoryResponse);
+    }
+    catch(e) {
+        console.log('Error in insertInventoryItem:', e);
+    }
+}
+
+async function insertUOM() {
+    const sql = 'SELECT * from integration.UOM';
+    try {
+        const uomResponse = await addUOM(false, sql);
+        console.log('UOM Response:', uomResponse);
+    }
+    catch(e) {
+        console.log('Error in insertUOM:', e);
+    }
+}
+
+async function insertVendor() {
+    const sql = 'SELECT * from integration.vendor';
+    try {
+        const vendorResponse = await addVendor(false, sql);
+        console.log('Vendor Response:', vendorResponse);
+    }
+    catch(e) {
+        console.log('Error in insertVendor:', e);
+    }
+}
+
+async function runFunction(func, s){
+    const sql = s || null;
+    let result;
+    switch(func) {
+        case 'inventoryItem':
+            result = await insertInventoryItem(sql);
+            break;
+        case 'importUOM':
+            result = await insertUOM(sql);
+            break;
+        case 'importVendor':
+            result = await insertVendor(sql);
+            break;
+        default:
+            console.log('No valid function specified. Use "inventoryItem", "importUOM", or "importVendor".');
+    }
+    console.log('Function eexecution complete:', func, result);
+    return result;
+}
+
+async function main() {
+    const args = process.argv.slice(2);
+    if(args.length === 0) {
+        console.log('No function specified. Use "inventoryItem", "importUOM", or "importVendor".');
+    }
+    else {
+        const func = args[0];
+        const sql = args[1] || null;
+        const res = await runFunction(func, sql);
+        return new Promise((resolve, reject) => {
+            if(res) {
+                resolve(res);
+            }
+            else {
+                reject(res);
+            }
+        });
+    }
+}
+
 // Sample function calls to demonstrate usage
 
 // getUOM().then((uoms) => {
@@ -924,40 +1002,6 @@ async function addUOM(file, sql) {
 //addInventoryItem();
 //addVendor();
 
-async function insertInventoryItem() {
-    const sql = 'SELECT * from integration.product ORDER BY externalid LIMIT 1';
-    try {
-        const inventoryResponse = await addInventoryItem(false, sql);
-        console.log('Inventory Item Response:', inventoryResponse);
-    }
-    catch(e) {
-        console.log('Error in insertInventoryItem:', e);
-    }
-}
-
-async function insertUOM() {
-    const sql = 'SELECT * from integration.UOM';
-    try {
-        const uomResponse = await addUOM(false, sql);
-        console.log('UOM Response:', uomResponse);
-    }
-    catch(e) {
-        console.log('Error in insertUOM:', e);
-    }
-}
-
-async function insertVendor() {
-    const sql = 'SELECT * from integration.vendor';
-    try {
-        const vendorResponse = await addVendor(false, sql);
-        console.log('Vendor Response:', vendorResponse);
-    }
-    catch(e) {
-        console.log('Error in insertVendor:', e);
-    }
-}
-
 // Inserts inventory items from the inventoryItem table in PostgreSQL database integration.inventoryItem schema to Netsuite database
 insertInventoryItem();
-// insertUOM();
-// insertVendor();
+

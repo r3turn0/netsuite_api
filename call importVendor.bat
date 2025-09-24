@@ -1,1 +1,1 @@
-call importVendor.js
+call node importVendor.js

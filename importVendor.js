@@ -709,7 +709,12 @@ async function addVendor(file, sql) {
                 for (const row of data.rows) {
                     for (const [header, netsuiteKey] of Object.entries(netsuiteKeyMap)) {
                         if(netsuiteKey === 'subsidiary') {
-                            netsuiteItem[netsuiteKey] = row['subsidiary'] ? row['subsidiary'] : 10;
+                            netsuiteItem[netsuiteKey] = row['subsidiary'] ? parseInt(row['subsidiary']) : parseInt('10');
+                            continue;
+                        }
+                        if(netsuiteItem[netsuiteKey] === 'true' || netsuiteItem[netsuiteKey] === 'false') {
+                            netsuiteItem[netsuiteKey] = netsuiteItem[netsuiteKey] === 'true' ? JSON.stringify('true') : JSON.stringify('false');
+                            continue;
                         }
                         const matchedKey1 = Object.keys(row).find(
                             k => k.toLowerCase().includes(header.replace(' ','_').toLowerCase())
@@ -890,6 +895,46 @@ async function insertVendor() {
     }
 }
 
+async function runFunction(func, s){
+    const sql = s || null;
+    let result;
+    switch(func) {
+        case 'inventoryItem':
+            result = await insertInventoryItem(sql);
+            break;
+        case 'importUOM':
+            result = await insertUOM(sql);
+            break;
+        case 'importVendor':
+            result = await insertVendor(sql);
+            break;
+        default:
+            console.log('No valid function specified. Use "inventoryItem", "importUOM", or "importVendor".');
+    }
+    console.log('Function eexecution complete:', func, result);
+    return result;
+}
+
+async function main() {
+    const args = process.argv.slice(2);
+    if(args.length === 0) {
+        console.log('No function specified. Use "inventoryItem", "importUOM", or "importVendor".');
+    }
+    else {
+        const func = args[0];
+        const sql = args[1] || null;
+        const res = await runFunction(func, sql);
+        return new Promise((resolve, reject) => {
+            if(res) {
+                resolve(res);
+            }
+            else {
+                reject(res);
+            }
+        });
+    }
+}
+
 // Sample function calls to demonstrate usage
 
 // getUOM().then((uoms) => {
@@ -958,6 +1003,4 @@ async function insertVendor() {
 // });
 
 // Inserts vendors from the vendor table in PostgreSQL database integration.vendor schema to Netsuite database
-// insertInventoryItem();
-// insertUOM();
-//insertVendor();
+insertVendor();

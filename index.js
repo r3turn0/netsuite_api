@@ -4,7 +4,7 @@ import { NetsuiteApiClient } from 'netsuite-api-client';
 //const netsuiteClient = require('netsuite-api-client');
 import dotenv from 'dotenv';
 import fs from 'fs';
-import csv from 'fast-csv';
+import csv, { parseString } from 'fast-csv';
 dotenv.config();
 const inputFolder = process.argv[2] || './csv/input/';
 
@@ -215,7 +215,7 @@ async function getInventoryItems(numRecords, offset) {
             console.log('Inventory Items:', items);
             inventory.push(items);
         } catch (error) {
-            console.error('Error in getInventoryItem:', error);
+            console.error('Error in fetching inventory items:', error);
         }
         numRecords -= batchSize;
         offset = 0; // Reset offset after the first batch
@@ -285,7 +285,7 @@ async function getUOM(limit,offset) {
             }
         });
     } catch (e) {
-        console.log('Error in getUOM:', e);
+        console.log('Error in fetching UOMs:', e);
         throw e;
     }
 }
@@ -397,7 +397,7 @@ async function postUOM(p, b, r, m) {
         return response;
     }
     catch(e) {
-        console.log('Error in postInventoryItem:', e);
+        console.log('Error in postUOM:', e);
         throw e;
     }
 }
@@ -709,7 +709,12 @@ async function addVendor(file, sql) {
                 for (const row of data.rows) {
                     for (const [header, netsuiteKey] of Object.entries(netsuiteKeyMap)) {
                         if(netsuiteKey === 'subsidiary') {
-                            netsuiteItem[netsuiteKey] = row['subsidiary'] ? row['subsidiary'] : 10;
+                            netsuiteItem[netsuiteKey] = row['subsidiary'] ? parseInt(row['subsidiary']) : parseInt('10');
+                            continue;
+                        }
+                        if(netsuiteItem[netsuiteKey] === 'true' || netsuiteItem[netsuiteKey] === 'false') {
+                            netsuiteItem[netsuiteKey] = netsuiteItem[netsuiteKey] === 'true' ? JSON.stringify('true') : JSON.stringify('false');
+                            continue;
                         }
                         const matchedKey1 = Object.keys(row).find(
                             k => k.toLowerCase().includes(header.replace(' ','_').toLowerCase())
@@ -717,6 +722,7 @@ async function addVendor(file, sql) {
                         const matchedKey2 = Object.keys(row).find(
                             k => k.toLowerCase().includes(netsuiteKey.toLowerCase())
                         );
+                        
                         // 1. Direct match
                         if (row.hasOwnProperty(header.replace(' ', '_').toLowerCase())) {
                             netsuiteItem[netsuiteKey] = row[header.replace(' ', '_').toLowerCase()];
@@ -762,8 +768,13 @@ async function addVendor(file, sql) {
                     try {
                         console.log('Netsuite Item to be posted:', netsuiteItem);
                         netsuiteItem.itemId = row['externalid'];
-                        netsuiteItem.id = row['internalid'] || null;
-                        const response = await postInventoryItem('inventoryItem', netsuiteItem, process.env.BASE_URL_REST);
+                        netsuiteItem.id = row['internalid'] || row['externalid'];
+                        const initRec = {
+                            "itemId": netsuiteItem.itemId,
+                            "taxSchedule": netsuiteItem.taxSchedule,
+                            "itemType": netsuiteItem.itemType
+                        }
+                        const response = await postInventoryItem('inventoryItem', initRec, process.env.BASE_URL_REST);
                         console.log('Posted inventoryItem from product:', response);
                         const updateResponse = await postInventoryItem('inventoryItem', netsuiteItem);
                         console.log('Updated inventoryItem from product:', updateResponse);
@@ -851,6 +862,103 @@ async function addUOM(file, sql) {
     }
 }
 
+async function insertInventoryItem(s) {
+    const sql = 'SELECT * from integration.product' || s;
+    try {
+        const inventoryResponse = await addInventoryItem(false, sql);
+        console.log('Inventory Item Response:', inventoryResponse);
+        return new Promise((resolve, reject) => {
+            if(inventoryResponse && inventoryResponse.statusCode === 204) {
+                resolve(inventoryResponse);
+            }
+            else {
+                reject(new Error('No inventoryResponse found'));
+            }
+        });
+    }
+    catch(e) {
+        console.log('Error in insertInventoryItem:', e);
+    }
+}
+
+async function insertUOM(s) {
+    const sql = 'SELECT * from integration.UOM' || s;
+    try {
+        const uomResponse = await addUOM(false, sql);
+        console.log('UOM Response:', uomResponse);
+        return new Promise((resolve, reject) => {
+            if(uomResponse && uomResponse.statusCode === 204) {
+                resolve(uomResponse);
+            }
+            else {
+                reject(new Error('No uomResponse found'));
+            }
+        });
+    }
+    catch(e) {
+        console.log('Error in insertUOM:', e);
+    }
+}
+
+async function insertVendor(s) {
+    const sql = 'SELECT * from integration.vendor' || s;
+    try {
+        const vendorResponse = await addVendor(false, sql);
+        console.log('Vendor Response:', vendorResponse);
+        return new Promise((resolve, reject) => {
+            if(vendorResponse && vendorResponse.statusCode === 204) {
+                resolve(vendorResponse);
+            }
+            else {
+                reject(new Error('No vendorResponse found'));
+            }
+        });
+    }
+    catch(e) {
+        console.log('Error in insertVendor:', e);
+    }
+}
+
+async function runFunction(func, s){
+    const sql = s || null;
+    let result;
+    switch(func) {
+        case 'inventoryItem':
+            result = await insertInventoryItem(sql);
+            break;
+        case 'importUOM':
+            result = await insertUOM(sql);
+            break;
+        case 'importVendor':
+            result = await insertVendor(sql);
+            break;
+        default:
+            console.log('No valid function specified. Use "inventoryItem", "importUOM", or "importVendor".');
+    }
+    console.log('Function eexecution complete:', func, result);
+    return result;
+}
+
+async function main() {
+    const args = process.argv.slice(2);
+    if(args.length === 0) {
+        console.log('No function specified. Use "inventoryItem", "importUOM", or "importVendor".');
+    }
+    else {
+        const func = args[0];
+        const sql = args[1] || null;
+        const res = await runFunction(func, sql);
+        return new Promise((resolve, reject) => {
+            if(res) {
+                resolve(res);
+            }
+            else {
+                reject(res);
+            }
+        });
+    }
+}
+
 // Sample function calls to demonstrate usage
 
 // getUOM().then((uoms) => {
@@ -924,39 +1032,8 @@ async function addUOM(file, sql) {
 //addInventoryItem();
 //addVendor();
 
-async function insertInventoryItem() {
-    const sql = 'SELECT * from integration.product ORDER BY externalid LIMIT 1';
-    try {
-        const inventoryResponse = await addInventoryItem(false, sql);
-        console.log('Inventory Item Response:', inventoryResponse);
-    }
-    catch(e) {
-        console.log('Error in insertInventoryItem:', e);
-    }
-}
+//insertInventoryItem();
+//insertUOM();
+//insertVendor();
 
-async function insertUOM() {
-    const sql = 'SELECT * from integration.UOM';
-    try {
-        const uomResponse = await addUOM(false, sql);
-        console.log('UOM Response:', uomResponse);
-    }
-    catch(e) {
-        console.log('Error in insertUOM:', e);
-    }
-}
-
-async function insertVendor() {
-    const sql = 'SELECT * from integration.vendor';
-    try {
-        const vendorResponse = await addVendor(false, sql);
-        console.log('Vendor Response:', vendorResponse);
-    }
-    catch(e) {
-        console.log('Error in insertVendor:', e);
-    }
-}
-
-insertInventoryItem();
-insertUOM();
-insertVendor();
+main();

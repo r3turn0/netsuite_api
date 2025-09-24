@@ -1,1 +1,1 @@
-call importUOM.js 
+call node importUOM.js 
